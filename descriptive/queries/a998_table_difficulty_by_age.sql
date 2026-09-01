@@ -54,6 +54,29 @@
 -- curriculum, not necessarily a data problem. Check `n` before trusting a
 -- point.
 --
+-- RAPID-GUESSING FILTER (Maria, 2026-08-13): drop Incorrect/Help answers under
+-- 1.2s, to keep the "hardest table/fact" ranking from being contaminated by
+-- disengaged rapid guesses.
+-- >>> READ BEFORE TRUSTING THE RESULT: this filter is NOT symmetric. It only
+--     ever removes rows from the WRONG side (is_error = 1) and never touches a
+--     fast CORRECT answer. Algebraically, dropping F fast-wrong rows takes
+--     error_rate from W/N to (W-F)/(N-F), which is provably <= W/N for any
+--     F > 0 -- i.e. this filter can only ever LOWER a cell's computed error
+--     rate, never raise it, and it lowers it MORE for cells with more fast
+--     guessing. That is the opposite of neutral cleaning: it is exactly the
+--     "hardest fact" signal this notebook exists to measure, so a table/fact
+--     that attracts a lot of rapid guessing will look artificially easier
+--     after this filter, not just "cleaner". Also note 1.2s is Maria's number,
+--     not the 1.5s antimode threshold already established for A998 racing
+--     detection (see a998-endofpack-keyboard-noise / Decision #12) -- that
+--     threshold is a SITTING-level flag (median RT < 1.5s AND accuracy < 25%
+--     for the whole session+pack), a different and more defensible construct
+--     than a flat per-answer time cutoff.
+-- If a symmetric version is wanted instead (drop fast answers regardless of
+-- correctness -- still not sitting-level, but at least not one-directional),
+-- replace the line below with:
+--   AND NOT (s.statement_seconds_spent < 1.2)
+--
 -- Scope: academic_year_id = 'ES_2025' (Spain, current year) only.
 -- =============================================================================
 
@@ -78,6 +101,7 @@ WITH base AS (
       AND s.statement_idx           >= 1      -- drop first statement (Decision #7)
       AND s.statement_seconds_spent IS NOT NULL
       AND m.classroom_course_age BETWEEN 8 AND 15   -- Decision #2
+      AND NOT (s.statement_result IN ('Incorrect', 'Help') AND s.statement_seconds_spent < 1.2)  -- rapid-guessing filter, see caveat above
 ),
 
 long AS (

@@ -24,6 +24,14 @@
 --   here since per-fact cells are noisier and RT is right-skewed).
 --
 -- Scope: academic_year_id = 'ES_2025' only.
+--
+-- RAPID-GUESSING FILTER (Maria, 2026-08-13): same filter and same caveat as
+-- a998_table_difficulty_by_age.sql -- drops Incorrect/Help answers under
+-- 1.2s, which is ONE-DIRECTIONAL (only ever removes wrong rows, never fast
+-- correct ones) and so can only ever LOWER a cell's error_rate, more so for
+-- cells with more fast guessing. See that file for the full writeup and for
+-- the symmetric-filter alternative (drop fast answers regardless of
+-- correctness) if that is wanted instead.
 -- =============================================================================
 
 WITH base AS (
@@ -47,6 +55,7 @@ WITH base AS (
       AND s.statement_idx           >= 1      -- drop first statement (Decision #7)
       AND s.statement_seconds_spent IS NOT NULL
       AND m.classroom_course_age BETWEEN 8 AND 15   -- Decision #2
+      AND NOT (s.statement_result IN ('Incorrect', 'Help') AND s.statement_seconds_spent < 1.2)  -- rapid-guessing filter, see caveat above
 )
 
 SELECT

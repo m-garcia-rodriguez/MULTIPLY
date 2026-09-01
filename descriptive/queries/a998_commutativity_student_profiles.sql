@@ -31,6 +31,26 @@
 --   -- {MIN_ATTEMPTS}   minimum attempts per direction (default 1)
 -- If either marker drifts, the notebook fails loudly rather than running a
 -- population different from the one it is comparing against.
+-- FAST WRONG ANSWERS: THE PUPIL IS DROPPED (added 2026-08-25, Maria) --------
+-- A wrong answer under 1.5 s is not an error about the fact, it is a guess or a
+-- stray keypress. Decision: exclude the whole PUPIL (within the academic year)
+-- as soon as they produce ONE such answer, rather than dropping that attempt or
+-- that sitting. Implemented as `fast_wrong` (per attempt) -> `has_fast_wrong`
+-- (per pupil, window) -> the marked filter line inside `tagged`.
+--   -- {FAST_WRONG_RT}      threshold in seconds (notebook: FAST_WRONG_MAX_RT)
+--   -- {FAST_WRONG_FILTER}  `has_fast_wrong = 0` filters, `1 = 1` keeps everyone
+-- Both markers are rewritten by commutativity.ipynb (cell 0: EXCLUDE_FAST_WRONG_
+-- STUDENTS, FAST_WRONG_MAX_RT) exactly like -- {YEARS} and -- {MIN_ATTEMPTS};
+-- the literals below are the DEFAULT so this file still runs standalone.
+--
+-- READ THIS BEFORE READING ANY TREND. The filter selects on the OUTCOME (being
+-- wrong), so the pupils that survive it are by construction more accurate than
+-- the population: every level in the output moves up and none of that movement
+-- is learning. Worse for age trends -- guessing is not equally common at every
+-- age, so the share of pupils removed varies by age, and part of any age curve
+-- becomes "who survived the filter" instead of "who knows the fact". The
+-- notebook prints the per-age drop rate next to the results for this reason.
+-- The rule also cannot tell a guess from a genuinely fast slip on an easy fact.
 -- =============================================================================
 
 WITH base AS (
@@ -40,7 +60,17 @@ WITH base AS (
         CAST(SPLIT(REPLACE(s.operation, '·', '×'), '×')[0] AS INT) AS f1,
         CAST(SPLIT(REPLACE(s.operation, '·', '×'), '×')[1] AS INT) AS f2,
         m.classroom_course_age                                      AS age,
-        CASE WHEN s.statement_result = 'Correct' THEN 1 ELSE 0 END  AS is_correct
+        CASE WHEN s.statement_result = 'Correct' THEN 1 ELSE 0 END  AS is_correct,
+
+        -- FAST WRONG ANSWER (added 2026-08-25): a wrong answer given in under
+        -- FAST_WRONG_MAX_RT seconds. 'Correct' is tested FIRST so a fast RIGHT
+        -- answer is never flagged; anything that is not 'Correct' (including
+        -- 'Help', which counts as wrong everywhere in this analysis) and lands
+        -- under the threshold is. A NULL statement_result falls in the second
+        -- branch, the same convention as is_correct above.
+        CASE WHEN s.statement_result = 'Correct' THEN 0
+             WHEN s.statement_seconds_spent < 1.5   -- {FAST_WRONG_RT}
+             THEN 1 ELSE 0 END                                       AS fast_wrong
 
     FROM bi_gold_prod.dm_research.fluency_test_statements s
     INNER JOIN bi_gold_prod.dm_research.fluency_test_metrics m
@@ -54,6 +84,23 @@ WITH base AS (
       AND m.classroom_course_age BETWEEN 8 AND 15   -- Decision #2
 ),
 
+-- ONE FLAG PER PUPIL (added 2026-08-25): did this pupil EVER answer wrong in
+-- under the threshold, anywhere in this year's A998 multiplications? The
+-- decision (Maria, 2026-08-25) is to drop the PUPIL, not the attempt: a pupil
+-- who guesses is treated as not having been measured, so none of their other
+-- attempts enters any pair either.
+-- The window spans everything `base` returns for that pupil in that academic
+-- year -- including the squares that `tagged` drops below -- because the
+-- question is about the pupil's behaviour, not about one pair. The year is in
+-- the partition for the same reason it is in the pairing key: a repeater must
+-- not lose their ES_2025 attempts because of an ES_2024 guess.
+fast_wrong_flag AS (
+    SELECT
+        b.*,
+        MAX(fast_wrong) OVER (PARTITION BY student_uuid, academic_year_id) AS has_fast_wrong
+    FROM base b
+),
+
 tagged AS (
     SELECT
         student_uuid,
@@ -63,8 +110,9 @@ tagged AS (
         GREATEST(f1, f2)                                         AS hi,
         CASE WHEN f1 >= f2 THEN 'big_first' ELSE 'big_second' END AS direction,
         is_correct
-    FROM base
+    FROM fast_wrong_flag
     WHERE f1 <> f2        -- squares have no second direction
+      AND has_fast_wrong = 0   -- {FAST_WRONG_FILTER}
 ),
 
 per_student_pair AS (

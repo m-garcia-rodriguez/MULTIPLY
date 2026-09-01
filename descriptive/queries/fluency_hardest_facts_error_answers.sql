@@ -90,6 +90,31 @@
 --   -- {YEARS}   academic year list (default ES_2025, Decision #8)
 --   -- {FACTS}   the (lo, hi) pairs to keep, unordered pairs with lo <= hi
 --   -- {AGES}    classroom_course_age range (default 8-15, Decision #2)
+--
+-- RAPID-GUESSING FILTER (Maria, 2026-08-14): drop wrong answers with
+-- duration < 1.2s from the `attempts` CTE, i.e. from the answer/error-type
+-- histograms in fluency_error_types.ipynb. Applied in `attempts`, not `base`
+-- or `scoped`, because every row of `attempts` is already a wrong answer (see
+-- "OUTPUT GRAIN" above) -- unlike the A998 filter (hardest_table.ipynb /
+-- a998_table_difficulty_by_age.sql), there is no mix of correct+incorrect
+-- rows here to bias, so this is a plain "drop fast wrong answers" cut, not an
+-- asymmetric one.
+-- >>> WORTH KNOWING BEFORE TRUSTING A BIG EFFECT: per this file's own header
+--     comment, Fluency errors are SLOWER than correct answers here (median
+--     10.02s wrong vs 4.93s correct), the opposite of the A998's instant
+--     rejections -- there is no 66/67/76/77-style keystroke block to remove.
+--     Verified live on 2026-08-14 (ES_2025, ages 8-15, these 5 facts): only
+--     0.646% of wrong FIRST attempts (5,243 / 811,707) and 3.528% of wrong
+--     SECOND attempts (11,944 / 338,590) are under 1.2s. So this filter
+--     removes a small, real slice -- not nothing -- but nowhere near the
+--     scale of the A998 artefact it is modelled on.
+-- >>> NOT APPLIED to `cell_totals` (n_cards, n_wrong_first, n_wrong_second,
+--     error_pct_first_cell): those describe how many CARDS were missed, a
+--     card-level fact, so they stay computed on every attempt regardless of
+--     typing speed. Only the per-answer histograms (`n`, `error_type`,
+--     `median_duration`) are computed on the >=1.2s subset. This means
+--     error_pct_first_cell will no longer equal SUM(n) / n_cards for a given
+--     (fact, age) -- that gap IS the number of fast guesses removed.
 -- =============================================================================
 
 WITH base AS (
@@ -162,6 +187,7 @@ attempts AS (
            box_from
     FROM scoped
     WHERE res <> 'Correct at first'
+      AND (duration_1 IS NULL OR duration_1 >= 1.2)  -- rapid-guessing filter, see caveat above
 
     UNION ALL
 
@@ -170,6 +196,7 @@ attempts AS (
            box_from
     FROM scoped
     WHERE res = 'Incorrect'
+      AND (duration_2 IS NULL OR duration_2 >= 1.2)  -- rapid-guessing filter, see caveat above
 ),
 
 labelled AS (
@@ -180,7 +207,14 @@ labelled AS (
         a.age,
         a.attempt_no,
         a.recovered_at_second,
-        CAST(a.answer AS INT) AS answer,
+        -- TRY_CAST i no CAST: `answer` ja es un DOUBLE (TRY_CAST del text
+        -- original), pero un valor absurdament gran hi cap i despres desborda
+        -- l'INT. Amb ANSI mode aixo no torna NULL, PETA la query sencera --
+        -- exactament el que va passar el 2026-08-25 amb la germana d'A998
+        -- d'aquest fitxer i una resposta de 10 xifres ('3333339333').
+        -- Amb TRY_CAST la fila torna amb user_answer NULL i el notebook la
+        -- compta i la deixa fora de l'histograma en lloc de perdre la consulta.
+        TRY_CAST(a.answer AS INT) AS answer,
         a.duration,
         CASE
             WHEN a.answer IS NULL                                   THEN 'no_answer'
